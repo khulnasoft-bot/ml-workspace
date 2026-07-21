@@ -1,7 +1,7 @@
 
 #!/bin/bash
 #
-# This scripts should be called at the end of each RUN command
+# This script should be called at the end of each RUN command
 # in the Dockerfiles.
 #
 # Each RUN command creates a new layer that is stored separately.
@@ -23,37 +23,37 @@ apt-get clean
 # Delete source files used for building binaries
 rm -rf /usr/local/src/*
 # Delete cache and temp folders
-rm -rf /tmp/* /var/tmp/* $HOME/.cache/* /var/cache/apt/*
+rm -rf /tmp/* /var/tmp/* /root/.cache/* /var/cache/apt/*
 # Fix permissions on tmp directory
-chmod 1777 /tmp
+chmod 1777 /tmp 2>/dev/null || true
 # Remove apt lists
 rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/*
 
 # Clean conda
-if [ -x "$(command -v conda)" ]; then
+if command -v conda &> /dev/null; then
     # Full Conda Cleanup
     conda clean --all -f -y
     # Remove source cache files
     conda build purge-all
-    if [ -d $CONDA_ROOT ]; then
+    if [ -d "$CONDA_ROOT" ]; then
         # Cleanup python bytecode files - not needed: https://jcrist.github.io/conda-docker-tips.html
-        find $CONDA_ROOT -type f -name '*.pyc' -delete
-        find $CONDA_ROOT -type l -name '*.pyc' -delete
+        find "$CONDA_ROOT" -type f -name '*.pyc' -delete
+        find "$CONDA_ROOT" -type l -name '*.pyc' -delete
     fi
 fi
 
 # Clean npm
-if [ -x "$(command -v npm)" ]; then
+if command -v npm &> /dev/null; then
     npm cache clean --force
-    rm -rf $HOME/.npm/* $HOME/.node-gyp/*
+    rm -rf "$HOME/.npm" "$HOME/.node-gyp"
 fi
 
 # Clean yarn
-if [ -x "$(command -v yarn)" ]; then
+if command -v yarn &> /dev/null; then
     yarn cache clean --all
 fi
 
-# pip is cleaned by the rm -rf $HOME/.cache/* commmand above
+# Clean pip (handled by rm -rf /root/.cache/* above)
 
 # Always exit without error
 exit 0

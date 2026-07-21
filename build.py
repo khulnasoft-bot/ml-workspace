@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import os
 import subprocess
 
 import docker
@@ -9,12 +10,31 @@ from ml_buildkit.helpers import build_docker
 REMOTE_IMAGE_PREFIX = "khulnasoft/"
 COMPONENT_NAME = "ml-workspace"
 FLAG_FLAVOR = "flavor"
+FLAG_BUILDX = "buildx"
+FLAG_CACHE_FROM = "cache-from"
+FLAG_CACHE_TO = "cache-to"
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument(
     "--" + FLAG_FLAVOR,
     help="Flavor (full, light, minimal, gpu) used for docker container",
     default="all",
+)
+parser.add_argument(
+    "--" + FLAG_BUILDX,
+    help="Use docker buildx for building with BuildKit",
+    action="store_true",
+    default=False,
+)
+parser.add_argument(
+    "--" + FLAG_CACHE_FROM,
+    help="Cache source for buildx (e.g., registry cache)",
+    default="",
+)
+parser.add_argument(
+    "--" + FLAG_CACHE_TO,
+    help="Cache destination for buildx (e.g., registry cache)",
+    default="",
 )
 
 args = build_utils.parse_arguments(argument_parser=parser)
@@ -91,6 +111,35 @@ build_date_build_arg = " --build-arg ARG_BUILD_DATE=" + str(build_date)
 flavor_build_arg = " --build-arg ARG_WORKSPACE_FLAVOR=" + str(flavor)
 version_build_arg = " --build-arg ARG_WORKSPACE_VERSION=" + VERSION
 
+def _build_with_buildx(docker_image_name, build_args, dockerfile_path=".", flavor="full"):
+    """Build using docker buildx with BuildKit and cache support."""
+    buildx_args = [
+        "docker", "buildx", "build",
+        "--progress=plain",
+        "--load",
+    ]
+    
+    if args.get(FLAG_CACHE_FROM):
+        buildx_args.extend(["--cache-from", f"type=registry,ref={args[FLAG_CACHE_FROM]}"])
+    
+    if args.get(FLAG_CACHE_TO):
+        buildx_args.extend(["--cache-to", f"type=registry,ref={args[FLAG_CACHE_TO]},mode=max"])
+    
+    buildx_args.extend(["-t", f"{docker_image_name}:{VERSION}"])
+    
+    if flavor in ["minimal", "light"]:
+        buildx_args.extend(["--build-arg", f"ARG_WORKSPACE_FLAVOR={flavor}"])
+    
+    buildx_args.extend(build_args.split())
+    buildx_args.append(dockerfile_path)
+    
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+    
+    completed_process = subprocess.run(buildx_args, env=env)
+    return completed_process
+
+
 if args[build_utils.FLAG_MAKE]:
     build_args = (
         version_build_arg
@@ -101,10 +150,18 @@ if args[build_utils.FLAG_MAKE]:
         + " "
         + build_date_build_arg
     )
-
-    completed_process = build_docker.build_docker_image(
-        docker_image_name, version=VERSION, build_args=build_args
-    )
+    
+    dockerfile_path = "."
+    if flavor == "gpu":
+        dockerfile_path = "gpu-flavor"
+    
+    if args.get(FLAG_BUILDX):
+        completed_process = _build_with_buildx(docker_image_name, build_args, dockerfile_path, flavor)
+    else:
+        completed_process = build_docker.build_docker_image(
+            docker_image_name, version=VERSION, build_args=build_args
+        )
+    
     if completed_process.returncode > 0:
         build_utils.exit_process(1)
 

@@ -1,3 +1,5 @@
+# syntax = docker/dockerfile:1.4
+
 FROM ubuntu:20.04 AS conda-bootstrap
 
 ENV \
@@ -9,7 +11,9 @@ ENV \
 
 WORKDIR /tmp
 
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
@@ -71,14 +75,14 @@ RUN \
 COPY resources/scripts/clean-layer.sh  /usr/bin/clean-layer.sh
 COPY resources/scripts/fix-permissions.sh  /usr/bin/fix-permissions.sh
 
- # Make clean-layer and fix-permissions executable
- RUN \
-    chmod a+rwx /usr/bin/clean-layer.sh && \
+# Make clean-layer and fix-permissions executable
+RUN chmod a+rwx /usr/bin/clean-layer.sh && \
     chmod a+rwx /usr/bin/fix-permissions.sh
 
 # Generate and Set locals
 # https://stackoverflow.com/questions/28405902/how-to-set-the-locale-inside-a-debian-ubuntu-docker-container#38553499
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y locales && \
     # install locales-all?
@@ -94,7 +98,8 @@ ENV LC_ALL="en_US.UTF-8" \
     LANGUAGE="en_US:en"
 
 # Install basics
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     # TODO add repos?
     # add-apt-repository ppa:apt-fast/stable
     # add-apt-repository 'deb http://security.ubuntu.com/ubuntu xenial-security main'
@@ -217,7 +222,7 @@ RUN \
         unzip \
         bzip2 \
         lzop \
-	    # deprecates bsdtar (https://ubuntu.pkgs.org/20.04/ubuntu-universe-i386/libarchive-tools_3.4.0-2ubuntu1_i386.deb.html)
+    	# deprecates bsdtar (https://ubuntu.pkgs.org/20.04/ubuntu-universe-i386/libarchive-tools_3.4.0-2ubuntu1_i386.deb.html)
         libarchive-tools \
         zlibc \
         # unpack (almost) everything with one command
@@ -320,7 +325,9 @@ ENV PATH=$CONDA_ROOT/bin:$PATH
 ENV LD_LIBRARY_PATH=$CONDA_ROOT/lib
 
 # Install pyenv to allow dynamic creation of python versions
-RUN git config --global http.lowSpeedLimit 0 && \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    git config --global http.lowSpeedLimit 0 && \
     git config --global http.lowSpeedTime 999999 && \
     git clone --depth 1 https://github.com/pyenv/pyenv.git $RESOURCES_PATH/.pyenv && \
     # Install pyenv plugins based on pyenv installer
@@ -339,7 +346,8 @@ ENV PATH=$RESOURCES_PATH/.pyenv/shims:$RESOURCES_PATH/.pyenv/bin:$PATH \
     PYENV_ROOT=$RESOURCES_PATH/.pyenv
 
 # Install pipx
-RUN pip install pipx && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install pipx && \
     # Configure pipx
     python -m pipx ensurepath && \
     # Cleanup
@@ -347,7 +355,10 @@ RUN pip install pipx && \
 ENV PATH=$HOME/.local/bin:$PATH
 
 # Install node.js
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/root/.node-gyp \
     apt-get update && \
     # https://nodejs.org/en/about/releases/ use even numbered releases, i.e. LTS versions
     # Install NodeSource GPG key and repo using official setup script
@@ -390,7 +401,9 @@ ENV PATH=/opt/node/bin:$PATH
 # Removed XRDP
 
 # Install supervisor for process supervision
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    --mount=type=cache,target=/root/.cache/pip \
     apt-get update && \
     # Create sshd run directory - required for starting process via supervisor
     mkdir -p /var/run/sshd && chmod 400 /var/run/sshd && \
@@ -408,7 +421,8 @@ RUN \
 ### GUI TOOLS ###
 
 # Install xfce4 & gui tools
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
     # Use staging channel to get newest xfce4 version (4.16)
     add-apt-repository -y ppa:xubuntu-dev/staging && \
     apt-get update && \
@@ -471,7 +485,8 @@ RUN \
 ENV LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$CONDA_ROOT/lib
 
 # Install VNC
-RUN \
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
     apt-get update  && \
     # required for websockify
     # apt-get install -y python-numpy  && \
@@ -551,17 +566,29 @@ RUN \
     clean-layer.sh
 
 ### END GUI TOOLS ###
-
 ### DATA SCIENCE BASICS ###
 
 ## Python 3
 # Data science libraries requirements
-COPY resources/libraries ${RESOURCES_PATH}/libraries
+# Copy requirements first for better cache utilization
+COPY resources/libraries/requirements-base.txt ${RESOURCES_PATH}/libraries/requirements-base.txt
+COPY resources/libraries/requirements-dev.txt ${RESOURCES_PATH}/libraries/requirements-dev.txt
+COPY resources/libraries/requirements-minimal.txt ${RESOURCES_PATH}/libraries/requirements-minimal.txt
+COPY resources/libraries/requirements-light.txt ${RESOURCES_PATH}/libraries/requirements-light.txt
+COPY resources/libraries/requirements-full.txt ${RESOURCES_PATH}/libraries/requirements-full.txt
 
 ### Install main data science libs
-RUN \
-    # Link Conda - All python are linke to the conda instances
-    # Linking python 3 crashes conda -> cannot install anyting - remove instead
+# Use BuildKit cache mounts for pip and conda caches
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/opt/conda/pkgs \
+    --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    --mount=type=cache,target=/tmp \
+    --mount=type=cache,target=/var/tmp \
+    \
+
+    # Link Conda - All python are linked to the conda instances
+    # Linking python 3 crashes conda -> cannot install anything - remove instead
     # ln -s -f $CONDA_ROOT/bin/python /usr/bin/python3 && \
     # if removed -> cannot use add-apt-repository
     # rm /usr/bin/python3 && \
@@ -597,6 +624,8 @@ RUN \
             # installed via apt-get: zlib  && \
     # Use flexible channel priority to reduce solver search space and avoid unnecessary conflicts
     conda config --system --set channel_priority flexible && \
+    # Install base pip requirements (stable, rarely changing)
+    pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-base.txt && \
     # Install minimal pip requirements
     pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-minimal.txt && \
     # If minimal flavor - exit here
@@ -650,10 +679,12 @@ RUN \
     conda install -y --freeze-installed libjpeg-turbo && \
     # Add snakemake for workflow management
     conda install -y -c bioconda -c conda-forge snakemake-minimal && \
-    # Add mamba as conda alternativ
+    # Add mamba as conda alternative
     conda install -y -c conda-forge mamba && \
     # Faiss - A library for efficient similarity search and clustering of dense vectors.
     conda install -y --freeze-installed faiss-cpu && \
+    # Install dev pip requirements (frequently changing)
+    pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-dev.txt && \
     # Install full pip requirements
     pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed --use-deprecated=legacy-resolver -r ${RESOURCES_PATH}/libraries/requirements-full.txt && \
     # Setup Spacy

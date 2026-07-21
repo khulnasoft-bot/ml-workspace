@@ -1,5 +1,8 @@
-# Base image
-FROM khulnasoft/ml-workspace:latest
+# syntax = docker/dockerfile:1.4
+
+# Use NVIDIA CUDA base image with Ubuntu 20.04, CUDA 11.2, cuDNN 8
+# This avoids manual CUDA/cuDNN installation and provides better caching
+FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04 AS gpu-base
 
 # Arguments
 ARG WORKSPACE_FLAVOR="gpu"
@@ -12,79 +15,41 @@ ENV WORKSPACE_FLAVOR=$WORKSPACE_FLAVOR
 ENV WORKSPACE_VERSION=$WORKSPACE_VERSION
 ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 
-# NVIDIA CUDA BASE
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gnupg2 curl ca-certificates && \
-    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub | apt-key add - && \
-    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64 /" > /etc/apt/sources.list.d/cuda.list && \
-    echo "deb https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu2004/x86_64 /" > /etc/apt/sources.list.d/nvidia-ml.list
-
-# Install CUDA
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cuda-cudart-11-2=11.2.152-1 \
-    cuda-compat-11-2 \
-    && ln -s cuda-11.2 /usr/local/cuda
-
-# Set up NVIDIA environment variables
-ENV PATH /usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
-
 # NVIDIA Container Runtime
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
 ENV NVIDIA_REQUIRE_CUDA "cuda>=11.2 brand=tesla,driver>=418,driver<419 brand=tesla,driver>=440,driver<441 driver>=450"
 
-# CUDA Runtime
+# CUDA paths are already set in the base image
+ENV PATH /usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+# NCCL version
 ENV NCCL_VERSION 2.8.4
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cuda-libraries-11-2=11.2.2-1 \
-    libnpp-11-2=11.3.2.152-1 \
-    cuda-nvtx-11-2=11.2.152-1 \
-    libcublas-11-2=11.4.1.1043-1 \
-    libcusparse-11-2=11.4.1.1152-1 \
-    libnccl2=$NCCL_VERSION-1+cuda11.2
 
-# CUDA Development
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libtinfo5 libncursesw5 \
-    cuda-cudart-dev-11-2=11.2.152-1 \
-    cuda-command-line-tools-11-2=11.2.2-1 \
-    cuda-minimal-build-11-2=11.2.2-1 \
-    cuda-libraries-dev-11-2=11.2.2-1 \
-    cuda-nvml-dev-11-2=11.2.152-1 \
-    libnpp-dev-11-2=11.3.2.152-1 \
-    libnccl-dev=2.8.4-1+cuda11.2 \
-    libcublas-dev-11-2=11.4.1.1043-1 \
-    libcusparse-dev-11-2=11.4.1.1152-1
-
-### END CUDA DEVEL ###
-
-### CUDANN8 DEVEL ###
-# https://gitlab.com/nvidia/container-images/cuda/-/blob/master/dist/11.2.2/ubuntu20.04-x86_64/devel/cudnn8/Dockerfile
-
-ENV CUDNN_VERSION 8.1.1.33
-LABEL com.nvidia.cudnn.version="${CUDNN_VERSION}"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcudnn8=$CUDNN_VERSION-1+cuda11.2 \
-    libcudnn8-dev=$CUDNN_VERSION-1+cuda11.2 \
-    && apt-mark hold libcudnn8 && \
-    # Cleanup
-    apt-get clean && \
-    rm -rf /root/.cache/* && \
-    rm -rf /tmp/* && \
-    rm -rf /var/lib/apt/lists/*
-
-### END CUDANN8 ###
-
-# Link Cupti:
+# Link Cupti
 ENV LD_LIBRARY_PATH ${LD_LIBRARY_PATH}:/usr/local/cuda/extras/CUPTI/lib64
+
+# Copy cleanup scripts
+COPY resources/scripts/clean-layer.sh /usr/bin/clean-layer.sh
+COPY resources/scripts/fix-permissions.sh /usr/bin/fix-permissions.sh
+RUN chmod +x /usr/bin/clean-layer.sh /usr/bin/fix-permissions.sh
+
+# Install additional system dependencies for GPU packages
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libomp-dev libopenblas-base \
+    && clean-layer.sh
 
 ### GPU DATA SCIENCE LIBRARIES ###
 
-RUN \
-    apt-get update && \
-    apt-get install -y libomp-dev libopenblas-base && \
+# Use BuildKit cache mounts for pip and conda
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/opt/conda/pkgs \
+    --mount=type=cache,target=/tmp \
+    --mount=type=cache,target=/var/tmp \
+    \
     # Install pytorch gpu
     # uninstall cpu only packages via conda
     conda remove --force -y pytorch cpuonly && \
@@ -105,7 +70,7 @@ RUN \
     # Install ONNX GPU Runtime
     pip uninstall -y onnxruntime && \
     pip install --no-cache-dir onnxruntime-gpu==1.8.0 onnxruntime-training==1.8.0 && \
-    # Install faiss gpu - TODO: to large?
+    # Install faiss gpu
     # conda remove --force -y faiss-cpu && \
     # conda install -y faiss-gpu -c pytorch && \
     # Update mxnet to gpu edition
@@ -113,6 +78,7 @@ RUN \
     # cuda111 -> >= 11.1
     pip install --no-cache-dir mxnet-cu112 && \
     # install jax: https://github.com/google/jax#pip-installation
+    pip install --# install jax: https://github.com/google/jax#pip-installation \
     pip install --upgrade jax[cuda111] -f https://storage.googleapis.com/jax-releases/jax_releases.html && \
     # Install pygpu - Required for theano: http://deeplearning.net/software/libgpuarray/
     conda install -y pygpu && \
@@ -130,23 +96,8 @@ RUN \
 
 # TODO install DALI: https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html#dali-and-ngc
 # TODO: if > Ubuntu 19.04 -> install nvtop: https://github.com/Syllo/nvtop
-# TODO: Install Arrrayfire: https://arrayfire.com/download/ pip install --no-cache-dir arrayfire && \
+# TODO: Install Arrayfire: https://arrayfire.com/download/ pip install --no-cache-dir arrayfire && \
 # TODO Nvidia Apex: https://github.com/NVIDIA/apex
-
-# cd $RESOURCES_PATH && \
-# git clone https://github.com/NVIDIA/apex && \
-# cd apex  && \
-# # Surpress output - if there is a problem remove to see logs &> /dev/null
-# pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./ && \
-# rm -rf apex && \
-
-# https://www.anaconda.com/getting-started-with-gpu-computing-in-anaconda/
-
-# By default, the majority of GPU memory will be allocated by the first
-# execution of a TensorFlow graph. While this behavior can be desirable for
-# production pipelines, it is less desirable for interactive use. Set
-# TF_FORCE_GPU_ALLOW_GROWTH to change this default behavior as if the user had
-ENV TF_FORCE_GPU_ALLOW_GROWTH true
 
 ### END DATA SCIENCE LIBRARIES ###
 
@@ -155,8 +106,6 @@ ENV TF_FORCE_GPU_ALLOW_GROWTH true
 ### END GPU TOOLS ###
 
 ### CONFIGURATION ###
-
-#TODO: tests are currently empty COPY resources/tests/ /resources/tests
 
 # argument needs to be initalized again
 ARG ARG_WORKSPACE_VERSION="latest"
@@ -169,11 +118,10 @@ ARG ARG_VCS_REF="unknown"
 LABEL \
     "workspace.version"=$WORKSPACE_VERSION \
     "workspace.flavor"=$WORKSPACE_FLAVOR \
-    "workspace.baseimage"=$ARG_WORKSPACE_BASE_IMAGE \
+    "workspace.baseimage"="nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04" \
     "org.opencontainers.image.version"=$WORKSPACE_VERSION \
     "org.opencontainers.image.revision"=$ARG_VCS_REF \
     "org.opencontainers.image.created"=$ARG_BUILD_DATE \
     "org.label-schema.version"=$WORKSPACE_VERSION \
     "org.label-schema.vcs-ref"=$ARG_VCS_REF \
     "org.label-schema.build-date"=$ARG_BUILD_DATE
-
