@@ -47,9 +47,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Use BuildKit cache mounts for pip and conda
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/opt/conda/pkgs \
-    --mount=type=cache,target=/tmp \
     --mount=type=cache,target=/var/tmp \
     \
+
     # Install pytorch gpu
     # uninstall cpu only packages via conda
     conda remove --force -y pytorch cpuonly && \
