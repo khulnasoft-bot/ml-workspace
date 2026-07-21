@@ -1,3 +1,43 @@
+FROM ubuntu:20.04 AS conda-bootstrap
+
+ENV \
+    CONDA_ROOT=/opt/conda \
+    PYTHON_VERSION="3.8.10" \
+    MINICONDA_VERSION=4.9.2 \
+    MINICONDA_MD5=122c8c9beb51e124ab32a0fa6426c656 \
+    CONDA_VERSION=4.9.2
+
+WORKDIR /tmp
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget \
+        ca-certificates \
+        bzip2 \
+        libglib2.0-0 \
+        libxext6 \
+        libsm6 \
+        libxrender1 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget --no-verbose https://repo.anaconda.com/miniconda/Miniconda3-py38_${CONDA_VERSION}-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    echo "${MINICONDA_MD5} *miniconda.sh" | md5sum -c - && \
+    /bin/bash /tmp/miniconda.sh -b -p $CONDA_ROOT && \
+    rm /tmp/miniconda.sh && \
+    $CONDA_ROOT/bin/conda config --system --add channels conda-forge && \
+    $CONDA_ROOT/bin/conda config --system --set auto_update_conda False && \
+    $CONDA_ROOT/bin/conda config --system --set show_channel_urls True && \
+    $CONDA_ROOT/bin/conda config --system --set channel_priority flexible && \
+    $CONDA_ROOT/bin/conda config --system --set pip_interop_enabled false && \
+    $CONDA_ROOT/bin/conda install -y -c defaults pip && \
+    $CONDA_ROOT/bin/pip install --upgrade pip && \
+    chmod -R a+rwx $CONDA_ROOT && \
+    $CONDA_ROOT/bin/conda clean -y --packages && \
+    $CONDA_ROOT/bin/conda clean -y -a -f
+
+ENV PATH=$CONDA_ROOT/bin:$PATH
+ENV LD_LIBRARY_PATH=$CONDA_ROOT/lib
+
 FROM ubuntu:20.04
 
 USER root
@@ -272,42 +312,7 @@ ENV \
     MINICONDA_MD5=122c8c9beb51e124ab32a0fa6426c656 \
     CONDA_VERSION=4.9.2
 
-RUN wget --no-verbose https://repo.anaconda.com/miniconda/Miniconda3-py38_${CONDA_VERSION}-Linux-x86_64.sh -O ~/miniconda.sh && \
-    echo "${MINICONDA_MD5} *miniconda.sh" | md5sum -c - && \
-    /bin/bash ~/miniconda.sh -b -p $CONDA_ROOT && \
-    export PATH=$CONDA_ROOT/bin:$PATH && \
-    rm ~/miniconda.sh && \
-    # Configure conda
-    # TODO: Add conde-forge as main channel -> remove if testted
-    # TODO, use condarc file
-    $CONDA_ROOT/bin/conda config --system --add channels conda-forge && \
-    $CONDA_ROOT/bin/conda config --system --set auto_update_conda False && \
-    $CONDA_ROOT/bin/conda config --system --set show_channel_urls True && \
-    $CONDA_ROOT/bin/conda config --system --set channel_priority strict && \
-    # Deactivate pip interoperability (currently default), otherwise conda tries to uninstall pip packages
-    $CONDA_ROOT/bin/conda config --system --set pip_interop_enabled false && \
-    # Update conda
-    $CONDA_ROOT/bin/conda update -y -n base -c defaults conda && \
-    $CONDA_ROOT/bin/conda update -y setuptools && \
-    $CONDA_ROOT/bin/conda install -y conda-build && \
-    # Update selected packages - install python 3.8.x
-    $CONDA_ROOT/bin/conda install -y --update-all python=$PYTHON_VERSION && \
-    # Link Conda
-    ln -s $CONDA_ROOT/bin/python /usr/local/bin/python && \
-    ln -s $CONDA_ROOT/bin/conda /usr/bin/conda && \
-    # Update
-    $CONDA_ROOT/bin/conda install -y pip && \
-    $CONDA_ROOT/bin/pip install --upgrade pip && \
-    chmod -R a+rwx /usr/local/bin/ && \
-    # Cleanup - Remove all here since conda is not in path as of now
-    # find /opt/conda/ -follow -type f -name '*.a' -delete && \
-    # find /opt/conda/ -follow -type f -name '*.js.map' -delete && \
-    $CONDA_ROOT/bin/conda clean -y --packages && \
-    $CONDA_ROOT/bin/conda clean -y -a -f  && \
-    $CONDA_ROOT/bin/conda build purge-all && \
-    # Fix permissions
-    fix-permissions.sh $CONDA_ROOT && \
-    clean-layer.sh
+COPY --from=conda-bootstrap /opt/conda /opt/conda
 
 ENV PATH=$CONDA_ROOT/bin:$PATH
 
@@ -315,12 +320,14 @@ ENV PATH=$CONDA_ROOT/bin:$PATH
 ENV LD_LIBRARY_PATH=$CONDA_ROOT/lib
 
 # Install pyenv to allow dynamic creation of python versions
-RUN git clone https://github.com/pyenv/pyenv.git $RESOURCES_PATH/.pyenv && \
+RUN git config --global http.lowSpeedLimit 0 && \
+    git config --global http.lowSpeedTime 999999 && \
+    git clone --depth 1 https://github.com/pyenv/pyenv.git $RESOURCES_PATH/.pyenv && \
     # Install pyenv plugins based on pyenv installer
-    git clone https://github.com/pyenv/pyenv-virtualenv.git $RESOURCES_PATH/.pyenv/plugins/pyenv-virtualenv  && \
-    git clone git://github.com/pyenv/pyenv-doctor.git $RESOURCES_PATH/.pyenv/plugins/pyenv-doctor && \
-    git clone https://github.com/pyenv/pyenv-update.git $RESOURCES_PATH/.pyenv/plugins/pyenv-update && \
-    git clone https://github.com/pyenv/pyenv-which-ext.git $RESOURCES_PATH/.pyenv/plugins/pyenv-which-ext && \
+    git clone --depth 1 https://github.com/pyenv/pyenv-virtualenv.git $RESOURCES_PATH/.pyenv/plugins/pyenv-virtualenv  && \
+    git clone --depth 1 https://github.com/pyenv/pyenv-doctor.git $RESOURCES_PATH/.pyenv/plugins/pyenv-doctor && \
+    git clone --depth 1 https://github.com/pyenv/pyenv-update.git $RESOURCES_PATH/.pyenv/plugins/pyenv-update && \
+    git clone --depth 1 https://github.com/pyenv/pyenv-which-ext.git $RESOURCES_PATH/.pyenv/plugins/pyenv-which-ext && \
     apt-get update && \
     # TODO: lib might contain high vulnerability
     # Required by pyenv
@@ -343,7 +350,8 @@ ENV PATH=$HOME/.local/bin:$PATH
 RUN \
     apt-get update && \
     # https://nodejs.org/en/about/releases/ use even numbered releases, i.e. LTS versions
-    curl -sL https://deb.nodesource.com/setup_14.x | sudo -E bash - && \
+    # Install NodeSource GPG key and repo using official setup script
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && \
     apt-get install -y nodejs && \
     # As conda is first in path, the commands 'node' and 'npm' reference to the version of conda.
     # Replace those versions with the newly installed versions of node
@@ -565,13 +573,13 @@ RUN \
     # If minimal flavor - install
     if [ "$WORKSPACE_FLAVOR" = "minimal" ]; then \
         # Install nomkl - mkl needs lots of space
-        conda install -y --update-all 'python='$PYTHON_VERSION nomkl ; \
+        conda install -y -c defaults 'python='$PYTHON_VERSION nomkl ; \
     else \
         # Install mkl for faster computations
-        conda install -y --update-all 'python='$PYTHON_VERSION mkl-service mkl ; \
+        conda install -y -c defaults 'python='$PYTHON_VERSION mkl-service mkl ; \
     fi && \
     # Install some basics - required to run container
-    conda install -y --update-all \
+    conda install -y -c defaults \
             'python='$PYTHON_VERSION \
             'ipython=7.24.*' \
             'notebook=6.4.*' \
@@ -587,8 +595,8 @@ RUN \
             numexpr && \
             # installed via apt-get and pip: protobuf \
             # installed via apt-get: zlib  && \
-    # Switch of channel priority, makes some trouble
-    conda config --system --set channel_priority false && \
+    # Use flexible channel priority to reduce solver search space and avoid unnecessary conflicts
+    conda config --system --set channel_priority flexible && \
     # Install minimal pip requirements
     pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-minimal.txt && \
     # If minimal flavor - exit here

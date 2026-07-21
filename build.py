@@ -25,6 +25,15 @@ docker_image_prefix = args.get(build_docker.FLAG_DOCKER_IMAGE_PREFIX)
 if not docker_image_prefix:
     docker_image_prefix = REMOTE_IMAGE_PREFIX
 
+
+def _remove_existing_container(client, name):
+    try:
+        existing = client.containers.get(name)
+        existing.remove(force=True)
+    except docker.errors.NotFound:
+        pass
+
+
 if not args.get(FLAG_FLAVOR):
     args[FLAG_FLAVOR] = "all"
 
@@ -103,28 +112,31 @@ if args[build_utils.FLAG_TEST]:
     workspace_name = f"workspace-test-{flavor}"
     workspace_port = "8080"
     client = docker.from_env()
-    container = client.containers.run(
-        f"{docker_image_name}:{VERSION}",
-        name=workspace_name,
-        environment={
-            "WORKSPACE_NAME": workspace_name,
-            "WORKSPACE_ACCESS_PORT": workspace_port,
-        },
-        detach=True,
-    )
+    _remove_existing_container(client, workspace_name)
+    container = None
+    completed_process = None
+    try:
+        container = client.containers.run(
+            f"{docker_image_name}:{VERSION}",
+            name=workspace_name,
+            environment={
+                "WORKSPACE_NAME": workspace_name,
+                "WORKSPACE_ACCESS_PORT": workspace_port,
+            },
+            detach=True,
+        )
+        container.reload()
+        container_ip = container.attrs["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
+        completed_process = build_utils.run(
+            f"docker exec --env WORKSPACE_IP={container_ip} {workspace_name} pytest '/resources/tests'",
+            exit_on_error=False,
+        )
+    finally:
+        if container is not None:
+            container.remove(force=True)
 
-    container.reload()
-    container_ip = container.attrs["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
-
-    completed_process = build_utils.run(
-        f"docker exec --env WORKSPACE_IP={container_ip} {workspace_name} pytest '/resources/tests'",
-        exit_on_error=False,
-    )
-
-    container.remove(force=True)
-    if completed_process.returncode > 0:
+    if completed_process is not None and completed_process.returncode > 0:
         build_utils.exit_process(1)
-
 
 if args[build_utils.FLAG_RELEASE]:
     # Bump all versions in some filess
