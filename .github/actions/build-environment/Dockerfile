@@ -11,5 +11,5 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python build dependencies
-COPY ../../../build_requirements.txt /tmp/build_requirements.txt
+COPY build_requirements.txt /tmp/build_requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/build_requirements.txt
