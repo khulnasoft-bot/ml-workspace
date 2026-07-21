@@ -112,7 +112,7 @@ dev-build-gpu:
 
 # CI/CD targets
 ci-build:
-	$(MAKE) build-all VERSION=$(shell git describe --tags --always) BUILDX=true CACHE_FROM=ghcr.io/khulnasoft/ml-workspace-cache CACHE_TO=ghcr.io/khulnasoft/ml-workspace-cache
+	$(MAKE) build-all VERSION=0.0.1-$(shell git rev-parse --short HEAD) BUILDX=true CACHE_FROM=ghcr.io/khulnasoft/ml-workspace-cache CACHE_TO=ghcr.io/khulnasoft/ml-workspace-cache
 
 ci-test:
 	$(MAKE) test-all VERSION=$(shell git describe --tags --always)
