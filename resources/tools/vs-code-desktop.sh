@@ -20,7 +20,9 @@ if [ ! -f "/usr/share/code/code" ]; then
     apt-get update
     apt-get install -y ./vscode.deb
     rm ./vscode.deb
-    rm /etc/apt/sources.list.d/vscode.list
+    if [ -f /etc/apt/sources.list.d/vscode.list ]; then
+        rm /etc/apt/sources.list.d/vscode.list
+    fi
 else
     echo "VS Code is already installed"
 fi

@@ -34,6 +34,7 @@ RUN wget --no-verbose https://repo.anaconda.com/miniconda/Miniconda3-py38_${COND
     $CONDA_ROOT/bin/conda config --system --set channel_priority flexible && \
     $CONDA_ROOT/bin/conda config --system --set pip_interop_enabled false && \
     $CONDA_ROOT/bin/conda install -y -c defaults pip && \
+    $CONDA_ROOT/bin/conda install -y -c conda-forge mamba && \
     $CONDA_ROOT/bin/pip install --upgrade pip && \
     chmod -R a+rwx $CONDA_ROOT && \
     $CONDA_ROOT/bin/conda clean -y --packages && \
@@ -592,7 +593,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     # if removed -> cannot use add-apt-repository
     # rm /usr/bin/python3 && \
     # rm /usr/bin/python3.5
-    ln -s -f $CONDA_ROOT/bin/python /usr/bin/python && \
+ln -s -f $CONDA_ROOT/bin/python /usr/bin/python && \
     apt-get update && \
     # upgrade pip
     pip install --upgrade pip && \
@@ -604,23 +605,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         # Install mkl for faster computations
         conda install -y -c defaults 'python='$PYTHON_VERSION mkl-service mkl ; \
     fi && \
-    # Install some basics - required to run container
-    conda install -y -c defaults \
+    # Use mamba for faster solving - install basics in smaller groups
+    mamba install -y -c defaults \
             'python='$PYTHON_VERSION \
             'ipython=7.24.*' \
             'notebook=6.4.*' \
-            'jupyterlab=3.0.*' \
-            # TODO: nbconvert 6.x makes problems with template_path
+            'jupyterlab=3.0.*' && \
+    mamba install -y -c defaults \
             'nbconvert=5.6.*' \
-            # TODO: temp fix: yarl version 1.5 is required for lots of libraries.
             'yarl==1.5.*' \
-            # TODO install scipy, numpy, sklearn, and numexpr via conda for mkl optimizaed versions: https://docs.anaconda.com/mkl-optimizations/
             'scipy==1.7.*' \
-            'numpy==1.19.*' \
+            'numpy==1.19.*' && \
+    mamba install -y -c defaults \
             scikit-learn \
             numexpr && \
-            # installed via apt-get and pip: protobuf \
-            # installed via apt-get: zlib  && \
     # Use flexible channel priority to reduce solver search space and avoid unnecessary conflicts
     conda config --system --set channel_priority flexible && \
     # Install base pip requirements (stable, rarely changing)
@@ -639,14 +637,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     fi && \
     # OpenMPI support
     apt-get install -y --no-install-recommends libopenmpi-dev openmpi-bin && \
-    conda install -y --freeze-installed  \
+    mamba install -y --freeze-installed  \
         'python='$PYTHON_VERSION \
         boost \
         mkl-include && \
     # Install mkldnn
-    conda install -y --freeze-installed -c mingfeima mkldnn && \
+    mamba install -y --freeze-installed -c mingfeima mkldnn && \
     # Install pytorch - cpu only
-    conda install -y -c pytorch "pytorch==1.9.*" cpuonly && \
+    mamba install -y -c pytorch "pytorch==1.9.*" cpuonly && \
     # Install light pip requirements
     pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-light.txt && \
     # If light light flavor - exit here
@@ -669,19 +667,16 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir tesserocr && \
     # TODO: installs tenserflow 2.4 - Required for tensorflow graphics (9MB)
     apt-get install -y --no-install-recommends libopenexr-dev && \
-    #pip install --no-cache-dir tensorflow-graphics==2020.5.20 && \
     # GCC OpenMP (GOMP) support library
     apt-get install -y --no-install-recommends libgomp1 && \
     # Install Intel(R) Compiler Runtime - numba optimization
     # TODO: don't install, results in memory error: conda install -y --freeze-installed -c numba icc_rt && \
     # Install libjpeg turbo for speedup in image processing
-    conda install -y --freeze-installed libjpeg-turbo && \
+    mamba install -y --freeze-installed libjpeg-turbo && \
     # Add snakemake for workflow management
-    conda install -y -c bioconda -c conda-forge snakemake-minimal && \
-    # Add mamba as conda alternative
-    conda install -y -c conda-forge mamba && \
+    mamba install -y -c bioconda -c conda-forge snakemake-minimal && \
     # Faiss - A library for efficient similarity search and clustering of dense vectors.
-    conda install -y --freeze-installed faiss-cpu && \
+    mamba install -y --freeze-installed faiss-cpu && \
     # Install dev pip requirements (frequently changing)
     pip install --no-cache-dir --upgrade --upgrade-strategy only-if-needed -r ${RESOURCES_PATH}/libraries/requirements-dev.txt && \
     # Install full pip requirements
